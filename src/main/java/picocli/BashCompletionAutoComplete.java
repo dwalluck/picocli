@@ -43,7 +43,7 @@ import static java.util.Locale.ENGLISH;
 /**
  * Stand-alone tool that generates bash auto-complete scripts for picocli-based command line applications.
  */
-public class BashCompletionAutoComplete {
+public final class BashCompletionAutoComplete {
     private BashCompletionAutoComplete() { }
 
     /**
@@ -52,7 +52,7 @@ public class BashCompletionAutoComplete {
      *      the fully qualified class name of the annotated {@code @Command} class to generate a completion script for.
      *      Other parameters are optional. Specify {@code -h} to see details on the available options.
      */
-    public static void main(String... args) { CommandLine.run(new App(), System.err, args); }
+    public static void main(String... args) { new CommandLine(new App()).execute(args); }
 
     /**
      * CLI command class for generating completion script.
@@ -86,6 +86,9 @@ public class BashCompletionAutoComplete {
 
         @Option(names = { "-h", "--help"}, usageHelp = true, description = "Display this help message and quit.")
         boolean usageHelpRequested;
+
+        App() {
+        }
 
         public void run() {
             try {
@@ -127,7 +130,7 @@ public class BashCompletionAutoComplete {
         }
     }
 
-    private static interface Function<T, V> {
+    private interface Function<T, V> {
         V apply(T t);
     }
 
@@ -135,14 +138,18 @@ public class BashCompletionAutoComplete {
      * Drops all characters that are not valid for bash function and identifier names.
      */
     private static class Bashify implements Function<CharSequence, String> {
+        Bashify() {
+        }
+
         public String apply(CharSequence value) {
             return bashify(value);
         }
     }
-    private static String bashify(CharSequence value) {
+    static String bashify(CharSequence value) {
         StringBuilder builder = new StringBuilder();
 
-        for (int i = 0; i < value.length(); i++) {
+        int length = value.length();
+        for (int i = 0; i < length; i++) {
             char c = value.charAt(i);
 
             if (Character.isLetterOrDigit(c) || c == '_') {
@@ -156,18 +163,27 @@ public class BashCompletionAutoComplete {
     }
 
     private static class NullFunction implements Function<CharSequence, String> {
+        NullFunction() {
+        }
+
         public String apply(CharSequence value) { return value.toString(); }
     }
 
-    private static interface Predicate<T> {
+    private interface Predicate<T> {
         boolean test(T t);
     }
     private static class EnumArgFilter implements Predicate<ArgSpec> {
+        EnumArgFilter() {
+        }
+
         public boolean test(ArgSpec f) {
             return f.type().isEnum();
         }
     }
     private static class HasCompletions implements Predicate<ArgSpec> {
+        HasCompletions() {
+        }
+
         public boolean test(ArgSpec f) {
             return f.completionCandidates() != null;
         }
@@ -329,8 +345,8 @@ public class BashCompletionAutoComplete {
                 "    _init_completion -s -n " + commandLine.getSeparator() + " || return\n" +
                 "\n" +
                 "    local commands options\n" +
-                "    commands=\'%s\'\n" +
-                "    options=\'%s\'\n";
+                "    commands='%s'\n" +
+                "    options='%s'\n";
 
         CommandSpec commandSpec = commandLine.getCommandSpec();
         List<PositionalParamSpec> enumPositionalParams = filter(commandSpec.positionalParameters(), new EnumArgFilter());
@@ -338,7 +354,7 @@ public class BashCompletionAutoComplete {
         String FOOTER = "" +
                 "\n" +
                 "    if [[ \"$cur\" == -* ]]; then\n" +
-                "        COMPREPLY=( $(compgen -W \'${options}\' -- \"$cur\" ) )\n" +
+                "        COMPREPLY=( $(compgen -W '${options}' -- \"$cur\" ) )\n" +
                 "        [[ $COMPREPLY == *" + commandLine.getSeparator() + " ]] && compopt -o nospace\n" +
                 "    else\n" +
                          generatePositionalParametersConditionals(commandLine, enumPositionalParams, depth) +
@@ -383,7 +399,9 @@ public class BashCompletionAutoComplete {
 
         buff.append("\n");
         buff.append("    local arg\n");
-        buff.append("    _get_first_arg\n");
+        buff.append("    _get_first_arg ");
+        buff.append(commandLine.getSeparator());
+        buff.append("\n");
         buff.append("\n");
         buff.append("    case $arg in\n");
         for (String subcommand : subcommands) {
@@ -404,7 +422,8 @@ public class BashCompletionAutoComplete {
     }
 
     private static void generateCompetionCandidates(StringBuilder buff, ArgSpec f) {
-        if (f instanceof OptionSpec) {
+        if (f.hidden()) {
+        } else if (f instanceof OptionSpec) {
             buff.append("\n");
             buff.append(format("    local %s_option_args\n", bashify(f.paramLabel().toLowerCase(ENGLISH))));
             buff.append(format("    %s_option_args=\"%s\"\n",
@@ -429,7 +448,7 @@ public class BashCompletionAutoComplete {
     private static String generateOptionsSwitch(List<OptionSpec> argOptions) {
         String outerCases = generateOptionsCases(argOptions);
 
-        if (outerCases.length() == 0) {
+        if (outerCases.isEmpty()) {
             return "";
         }
 
@@ -446,6 +465,7 @@ public class BashCompletionAutoComplete {
     }
 
     private static boolean isDirectory(ArgSpec f) {
+        if (f.hidden()) { return false; } // #887 skip hidden options
         if (f instanceof OptionSpec) {
             for (String name : ((OptionSpec) f).names()) {
                 String lname = name.toLowerCase(ENGLISH);
@@ -457,9 +477,7 @@ public class BashCompletionAutoComplete {
         } else if (f instanceof PositionalParamSpec) {
             String pname = ((PositionalParamSpec) f).paramLabel().toLowerCase(ENGLISH);
 
-            if (pname.contains("dir")) {
-                return true;
-            }
+            return pname.contains("dir");
         }
 
         return false;
@@ -469,9 +487,10 @@ public class BashCompletionAutoComplete {
         StringBuilder buff = new StringBuilder(1024);
 
         for (OptionSpec option : argOptionFields) {
+            if (option.hidden()) { continue; } // #887 skip hidden options
             if (option.completionCandidates() != null) {
                 buff.append(format("        %s)\n", concat("|", option.names())));
-                buff.append(format("            COMPREPLY=( $( compgen -W \'${%s_option_args}\' -- \"$cur\" ) )\n", bashify(option.paramLabel().toLowerCase(ENGLISH))));
+                buff.append(format("            COMPREPLY=( $( compgen -W '${%s_option_args}' -- \"$cur\" ) )\n", bashify(option.paramLabel().toLowerCase(ENGLISH))));
                 buff.append("            return\n");
                 buff.append("            ;;\n");
             } else if (option.type().equals(File.class) || "java.nio.file.Path".equals(option.type().getName())) {
@@ -506,6 +525,7 @@ public class BashCompletionAutoComplete {
     private static String optionNames(List<OptionSpec> options, String separator) {
         List<String> result = new ArrayList<String>();
         for (OptionSpec option : options) {
+            if (option.hidden()) { continue; } // #887 skip hidden options
             if (separator == null) {
                 result.addAll(Arrays.asList(option.names()));
             } else {
@@ -531,18 +551,16 @@ public class BashCompletionAutoComplete {
         List<PositionalParamSpec> positionalParameters = commandSpec.positionalParameters();
         StringBuilder buff = new StringBuilder(1024);
 
-        String separator = commandLine.getSeparator();
-
-        buff.append("        local args\n");
-        buff.append("        _count_args");
-        buff.append(" ");
-        buff.append(separator);
-        buff.append("\n");
-
         if (!commandLine.getSubcommands().keySet().isEmpty()) {
+            buff.append("        local args\n");
+            buff.append("        _count_args");
+            buff.append(" ");
+            buff.append(commandLine.getSeparator());
             buff.append("\n");
-            buff.append("        if (( $args == 1 )); then\n");
-            buff.append("            COMPREPLY=( $(compgen -W \'${commands}\' -- \"$cur\" ) )\n");
+
+            buff.append("\n");
+            buff.append("        if (( $args == " + (depth + 1) + " )); then\n");
+            buff.append("            COMPREPLY=( $(compgen -W '${commands}' -- \"$cur\" ) )\n");
             buff.append("        fi\n");
         }
 
@@ -558,17 +576,17 @@ public class BashCompletionAutoComplete {
 
             Range arity = positionalParameter.arity();
 
-            buff.append("\n");
-            if (arity.max == 1) {
+            // buff.append("\n");
+            if (arity.max() == 1) {
                 buff.append("        if (( $args == ");
                 buff.append(index);
             } else {
                 buff.append("        if (( $args >= ");
                 buff.append(index);
 
-                if (arity.max < Integer.MAX_VALUE) {
+                if (arity.max() < Integer.MAX_VALUE) {
                     buff.append(" && $args <= ");
-                    buff.append(index + arity.max - 1);
+                    buff.append(index + arity.max() - 1);
                 }
             }
 
